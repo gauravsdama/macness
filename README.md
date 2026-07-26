@@ -96,7 +96,3 @@ swift test
 ```
 
 Keep changes small, preserve structured artifacts, and avoid introducing unbounded subprocesses or captures. See [CONTRIBUTING.md](CONTRIBUTING.md).
-
-## License
-
-[MIT](LICENSE)
