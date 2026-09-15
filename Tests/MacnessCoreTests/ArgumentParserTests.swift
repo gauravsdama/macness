@@ -1,6 +1,11 @@
 import MacnessCore
 import Testing
 
+@Test func parsesVersion() throws {
+    #expect(try MacnessArguments.parse(["--version"]) == .version)
+    #expect(MacnessVersion.current == "0.1.0")
+}
+
 @Test func parsesVerifyExpectations() throws {
     let command = try MacnessArguments.parse([
         "verify",

@@ -1,0 +1,24 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Verify a clean source tree
+        run: ./scripts/release_check.sh --publish
+      - name: Package and install from a clean CI checkout
+        run: |
+          ./scripts/package_release.sh --output "$RUNNER_TEMP/dist"
+          unzip -q "$RUNNER_TEMP/dist/macness-0.1.0-macos-arm64.zip" -d "$RUNNER_TEMP/unpacked"
+          "$RUNNER_TEMP/unpacked/macness-0.1.0-macos-arm64/install.sh" --prefix "$RUNNER_TEMP/prefix"
+          test "$("$RUNNER_TEMP/prefix/bin/macness" --version)" = "0.1.0"

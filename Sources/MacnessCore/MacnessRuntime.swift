@@ -26,6 +26,9 @@ public final class MacnessRuntime {
         case .help:
             writeStdout(MacnessArguments.helpText)
             return 0
+        case .version:
+            writeStdout(MacnessVersion.current)
+            return 0
         case .doctor(let options):
             try doctor(options)
             return 0

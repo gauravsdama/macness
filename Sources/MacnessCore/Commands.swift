@@ -2,6 +2,7 @@ import Foundation
 
 public enum MacnessCommand: Equatable {
     case help
+    case version
     case doctor(DoctorOptions)
     case build(BuildOptions)
     case launch(LaunchOptions)
@@ -9,6 +10,10 @@ public enum MacnessCommand: Equatable {
     case verify(VerifyOptions)
     case monitor(MonitorOptions)
     case logs(LogOptions)
+}
+
+public enum MacnessVersion {
+    public static let current = "0.1.0"
 }
 
 public struct DoctorOptions: Equatable {

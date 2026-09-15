@@ -1,0 +1,29 @@
+name: Developer release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Verify clean source release
+        run: ./scripts/release_check.sh --publish
+      - name: Build unsigned Apple Silicon developer archive
+        run: ./scripts/package_release.sh --version "${GITHUB_REF_NAME#v}" --output "$RUNNER_TEMP/dist"
+      - name: Attach unsigned developer archive and checksum
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "$RUNNER_TEMP/dist/macness-${GITHUB_REF_NAME#v}-macos-arm64.zip" \
+            "$RUNNER_TEMP/dist/macness-${GITHUB_REF_NAME#v}-macos-arm64.zip.sha256" \
+            --prerelease \
+            --title "Macness ${GITHUB_REF_NAME#v} source/dev release" \
+            --notes-file .github/release-notes-dev.md

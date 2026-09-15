@@ -5,6 +5,7 @@ public enum MacnessArguments {
     macness: a macOS app harness for agent-driven development
 
     Usage:
+      macness --version
       macness doctor [--prompt] [--json]
       macness build (--project PATH | --workspace PATH) [--scheme NAME] [--configuration NAME] [--destination DEST] [--derived-data-path PATH] [--action build|test] [-- XCODEBUILD_ARGS...]
       macness launch (--app PATH | --bundle-id ID) [--fresh] [--hide] [--wait SECONDS] [-- APP_ARGS...]
@@ -31,6 +32,8 @@ public enum MacnessArguments {
         switch command {
         case "-h", "--help", "help":
             return .help
+        case "-v", "--version", "version":
+            return .version
         case "doctor":
             return .doctor(try parseDoctor(&scanner))
         case "build":
