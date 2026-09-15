@@ -6,7 +6,7 @@ Status: **source/dev release ready**. The repository is licensed under Apache-2.
 
 - Intended user: macOS developers who need repeatable build, launch, accessibility, screenshot, and log evidence from the command line.
 - Employer-facing story: a focused Swift CLI that turns native macOS verification into structured, reviewable artifacts while keeping permissions and captures local.
-- Repository: `gauravsdama/macness`, private, not a GitHub fork, with one author in the local commit history.
+- Repository: `gauravsdama/macness`, public, not a GitHub fork, with one author in the local commit history.
 - Source: first-party Swift code. Swift Package Manager reports no third-party package dependencies and no vendored source is tracked.
 - Interface: CLI only. There is no product UI or user-facing string inventory to maintain.
 
@@ -20,6 +20,7 @@ Status: **source/dev release ready**. The repository is licensed under Apache-2.
 - `./scripts/release_check.sh`: runs diff hygiene, tests, a release build, CLI smoke test, personal-path check, and tracked-artifact check.
 - `./scripts/package_release.sh --output /tmp/macness-package-final`: produced a deterministic `macness-0.1.0-macos-arm64.zip`; two consecutive builds had SHA-256 `b2bcf1d5b7bad86e60661c90dd3285f55259f6679f7df763d3184e74b53d3bc8`.
 - The packaged installer verified `SHA256SUMS`, installed into a fresh temporary prefix, reported version `0.1.0`, and ran `doctor --json` successfully. `file` confirmed a thin arm64 Mach-O.
+- GitHub Actions run `35034516465` passed the clean-tree gate and installed the packaged archive from a clean `macos-26` checkout. The `v0.1.0` developer-release workflow attached the unsigned zip and checksum as a prerelease.
 
 ## Release boundary
 
