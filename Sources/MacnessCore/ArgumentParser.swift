@@ -20,7 +20,8 @@ public enum MacnessArguments {
       macness launch --app ./Build/Products/Debug/MyApp.app --fresh -- --demo-mode
       macness verify --bundle-id com.example.MyApp --expect-window MyApp --expect-text Ready
 
-    Artifacts default to .macness/runs/<timestamp>-<label>/.
+    `--wait` is a readiness timeout. Numeric capture and monitoring options are bounded.
+    Artifacts default to private .macness/runs/<timestamp>-<label>-<nonce>/ directories.
     """
 
     public static func parse(_ arguments: [String]) throws -> MacnessCommand {
@@ -105,6 +106,15 @@ public enum MacnessArguments {
         if options.project == nil && options.workspace == nil {
             throw MacnessError.usage("build requires --project or --workspace.")
         }
+        guard ["build", "test"].contains(options.action) else {
+            throw MacnessError.usage("--action must be build or test.")
+        }
+        try validateNonEmpty(options.project, flag: "--project")
+        try validateNonEmpty(options.workspace, flag: "--workspace")
+        try validateNonEmpty(options.scheme, flag: "--scheme")
+        try validateNonEmpty(options.configuration, flag: "--configuration")
+        try validateNonEmpty(options.destination, flag: "--destination")
+        try validateNonEmpty(options.derivedDataPath, flag: "--derived-data-path")
         return options
     }
 
@@ -139,6 +149,9 @@ public enum MacnessArguments {
         if options.appPath == nil && options.bundleID == nil {
             throw MacnessError.usage("launch requires --app or --bundle-id.")
         }
+        try validateFiniteRange(options.waitSeconds, flag: "--wait", range: 0...300)
+        try validateNonEmpty(options.appPath, flag: "--app")
+        try validateBundleID(options.bundleID)
         return options
     }
 
@@ -166,6 +179,9 @@ public enum MacnessArguments {
             }
         }
         try validateTarget(options.target, command: "snapshot")
+        try validateDepth(options.maxDepth)
+        try validateNonEmpty(options.outRoot, flag: "--out")
+        try validateNonEmpty(options.label, flag: "--label")
         return options
     }
 
@@ -201,6 +217,12 @@ public enum MacnessArguments {
             }
         }
         try validateTarget(options.target, command: "verify")
+        try validateDepth(options.maxDepth)
+        try validateNonEmpty(options.outRoot, flag: "--out")
+        try validateNonEmpty(options.label, flag: "--label")
+        try validateNonEmpty(options.expectedWindows, flag: "--expect-window")
+        try validateNonEmpty(options.expectedTexts, flag: "--expect-text")
+        try validateNonEmpty(options.expectedRoles, flag: "--expect-role")
         return options
     }
 
@@ -232,6 +254,11 @@ public enum MacnessArguments {
             }
         }
         try validateTarget(options.target, command: "monitor")
+        try validateFiniteRange(options.intervalSeconds, flag: "--interval", range: 0.1...3600)
+        try validateRange(options.count, flag: "--count", range: 1...10_000)
+        try validateDepth(options.maxDepth)
+        try validateNonEmpty(options.outRoot, flag: "--out")
+        try validateNonEmpty(options.label, flag: "--label")
         return options
     }
 
@@ -255,6 +282,8 @@ public enum MacnessArguments {
             }
         }
         try validateTarget(options.target, command: "logs")
+        try validateRange(options.seconds, flag: "--seconds", range: 1...86_400)
+        try validateNonEmpty(options.outPath, flag: "--out")
         return options
     }
 
@@ -264,6 +293,51 @@ public enum MacnessArguments {
         }
         if target.isEmpty {
             throw MacnessError.usage("\(command) requires --bundle-id or --pid.")
+        }
+        try validateBundleID(target.bundleID)
+    }
+
+    private static func validateBundleID(_ value: String?) throws {
+        guard let value else { return }
+        guard
+            !value.isEmpty,
+            value.first != ".",
+            value.last != ".",
+            !value.contains(".."),
+            value.unicodeScalars.allSatisfy({
+                CharacterSet.alphanumerics.union(CharacterSet(charactersIn: ".-")).contains($0)
+            })
+        else {
+            throw MacnessError.usage("--bundle-id contains unsupported characters.")
+        }
+    }
+
+    private static func validateDepth(_ value: Int) throws {
+        try validateRange(value, flag: "--max-depth", range: 0...20)
+    }
+
+    private static func validateRange(_ value: Int, flag: String, range: ClosedRange<Int>) throws {
+        guard range.contains(value) else {
+            throw MacnessError.usage("\(flag) must be between \(range.lowerBound) and \(range.upperBound).")
+        }
+    }
+
+    private static func validateFiniteRange(_ value: Double, flag: String, range: ClosedRange<Double>) throws {
+        guard value.isFinite, range.contains(value) else {
+            throw MacnessError.usage("\(flag) must be between \(range.lowerBound) and \(range.upperBound).")
+        }
+    }
+
+    private static func validateNonEmpty(_ value: String?, flag: String) throws {
+        guard let value else { return }
+        guard !value.isEmpty else {
+            throw MacnessError.usage("\(flag) requires a non-empty value.")
+        }
+    }
+
+    private static func validateNonEmpty(_ values: [String], flag: String) throws {
+        if values.contains(where: \.isEmpty) {
+            throw MacnessError.usage("\(flag) requires a non-empty value.")
         }
     }
 
@@ -285,8 +359,8 @@ public enum MacnessArguments {
     }
 
     private static func parsePID(_ value: String, flag: String) throws -> Int32 {
-        guard let parsed = Int32(value) else {
-            throw MacnessError.usage("\(flag) expects a process id.")
+        guard let parsed = Int32(value), parsed > 0 else {
+            throw MacnessError.usage("\(flag) expects a positive process id.")
         }
         return parsed
     }

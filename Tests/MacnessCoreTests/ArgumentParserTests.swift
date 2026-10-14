@@ -1,9 +1,9 @@
-import MacnessCore
+@testable import MacnessCore
 import Testing
 
 @Test func parsesVersion() throws {
     #expect(try MacnessArguments.parse(["--version"]) == .version)
-    #expect(MacnessVersion.current == "0.1.0")
+    #expect(MacnessVersion.current == "0.1.1")
 }
 
 @Test func parsesVerifyExpectations() throws {
@@ -72,4 +72,48 @@ import Testing
     #expect(tree.containsText("ready"))
     #expect(tree.containsRole("AXButton"))
     #expect(!tree.containsText("missing"))
+}
+
+@Test func buildsOneAccessibilitySearchIndex() {
+    let tree = AXNode(
+        role: "AXApplication",
+        title: "Demo",
+        children: [
+            AXNode(role: "AXButton", title: "Run"),
+            AXNode(role: "AXStaticText", value: "Ready"),
+        ]
+    )
+
+    let index = AXSearchIndex(root: tree)
+    #expect(index.containsText("ready"))
+    #expect(index.containsText("demo"))
+    #expect(index.containsRole("AXButton"))
+    #expect(!index.containsRole("AXWindow"))
+}
+
+@Test(arguments: [
+    ["launch", "--bundle-id", "com.example.App", "--wait", "-1"],
+    ["launch", "--bundle-id", "com.example.App", "--wait", "nan"],
+    ["snapshot", "--pid", "0"],
+    ["snapshot", "--pid", "123", "--max-depth", "21"],
+    ["verify", "--bundle-id", "com.example.App", "--expect-text="],
+    ["monitor", "--bundle-id", "com.example.App", "--count", "0"],
+    ["monitor", "--bundle-id", "com.example.App", "--interval", "0"],
+    ["logs", "--bundle-id", "com.example.App", "--seconds", "0"],
+    ["logs", "--bundle-id", "com.example.App\" OR TRUEPREDICATE", "--seconds", "10"],
+    ["build", "--project", "Demo.xcodeproj", "--action", "archive"],
+    ["build", "--project="],
+])
+func rejectsUnsafeOptionValues(arguments: [String]) {
+    do {
+        _ = try MacnessArguments.parse(arguments)
+        Issue.record("Expected invalid arguments to throw: \(arguments)")
+    } catch let error as MacnessError {
+        if case .usage = error {
+            return
+        }
+        Issue.record("Expected a usage error, got: \(error)")
+    } catch {
+        Issue.record("Expected a MacnessError, got: \(error)")
+    }
 }

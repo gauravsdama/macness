@@ -19,6 +19,5 @@ jobs:
       - name: Package and install from a clean CI checkout
         run: |
           ./scripts/package_release.sh --output "$RUNNER_TEMP/dist"
-          unzip -q "$RUNNER_TEMP/dist/macness-0.1.0-macos-arm64.zip" -d "$RUNNER_TEMP/unpacked"
-          "$RUNNER_TEMP/unpacked/macness-0.1.0-macos-arm64/install.sh" --prefix "$RUNNER_TEMP/prefix"
-          test "$("$RUNNER_TEMP/prefix/bin/macness" --version)" = "0.1.0"
+          ./scripts/verify_release_archive.sh \
+            "$RUNNER_TEMP/dist/macness-0.1.1-macos-arm64.zip"

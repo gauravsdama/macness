@@ -113,22 +113,88 @@ public struct AXNode: Codable, Equatable {
 
 public extension AXNode {
     var searchableStrings: [String] {
-        var values = [role, subrole, title, value, axDescription, identifier, help].compactMap { $0 }
-        for child in children {
-            values.append(contentsOf: child.searchableStrings)
-        }
-        return values
+        AXSearchIndex(root: self).strings
     }
 
     func containsText(_ text: String) -> Bool {
-        searchableStrings.contains { $0.localizedCaseInsensitiveContains(text) }
+        AXSearchIndex(root: self).containsText(text)
     }
 
     func containsRole(_ expectedRole: String) -> Bool {
-        if role == expectedRole {
-            return true
+        AXSearchIndex(root: self).containsRole(expectedRole)
+    }
+}
+
+struct AXSearchIndex: Equatable {
+    let strings: [String]
+    let roles: Set<String>
+    private let normalizedStrings: [String]
+
+    init(root: AXNode) {
+        var strings: [String] = []
+        var roles = Set<String>()
+        var pending = [root]
+
+        while let node = pending.popLast() {
+            strings.append(contentsOf: [
+                node.role,
+                node.subrole,
+                node.title,
+                node.value,
+                node.axDescription,
+                node.identifier,
+                node.help,
+            ].compactMap { $0 })
+            if let role = node.role {
+                roles.insert(role)
+            }
+            pending.append(contentsOf: node.children)
         }
-        return children.contains { $0.containsRole(expectedRole) }
+
+        self.strings = strings
+        self.roles = roles
+        self.normalizedStrings = strings.map(Self.normalize)
+    }
+
+    func containsText(_ text: String) -> Bool {
+        let expected = Self.normalize(text)
+        return normalizedStrings.contains { $0.contains(expected) }
+    }
+
+    func containsRole(_ role: String) -> Bool {
+        roles.contains(role)
+    }
+
+    private static func normalize(_ value: String) -> String {
+        value.folding(options: .caseInsensitive, locale: .current)
+    }
+}
+
+struct AccessibilitySnapshotMetadata: Codable, Equatable {
+    var nodesVisited: Int
+    var maxNodes: Int
+    var maxDepth: Int
+    var maxChildrenPerNode: Int
+    var maxDurationSeconds: Double
+    var truncated: Bool
+    var truncationReasons: [String]
+
+    init(
+        nodesVisited: Int,
+        maxNodes: Int,
+        maxDepth: Int,
+        maxChildrenPerNode: Int,
+        maxDurationSeconds: Double,
+        truncated: Bool,
+        truncationReasons: [String]
+    ) {
+        self.nodesVisited = nodesVisited
+        self.maxNodes = maxNodes
+        self.maxDepth = maxDepth
+        self.maxChildrenPerNode = maxChildrenPerNode
+        self.maxDurationSeconds = maxDurationSeconds
+        self.truncated = truncated
+        self.truncationReasons = truncationReasons
     }
 }
 
@@ -137,6 +203,7 @@ public struct AppSnapshot: Codable, Equatable {
     public var target: TargetSnapshot
     public var windows: [WindowSnapshot]
     public var accessibility: AXNode?
+    var accessibilityMetadata: AccessibilitySnapshotMetadata?
     public var accessibilityError: String?
     public var screenshotPath: String?
     public var screenshotError: String?

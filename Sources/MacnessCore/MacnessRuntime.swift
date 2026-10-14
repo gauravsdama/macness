@@ -6,7 +6,7 @@ import Foundation
 public final class MacnessRuntime {
     private let processRunner: ProcessRunner
     private let accessibilityReader: AccessibilityReader
-    private let fileManager: FileManager
+    private let artifactStore: ArtifactStore
     private let jsonEncoder: JSONEncoder
 
     public init(
@@ -16,7 +16,7 @@ public final class MacnessRuntime {
     ) {
         self.processRunner = processRunner
         self.accessibilityReader = accessibilityReader
-        self.fileManager = fileManager
+        self.artifactStore = ArtifactStore(fileManager: fileManager)
         self.jsonEncoder = JSONEncoder()
         self.jsonEncoder.outputFormatting = [.prettyPrinted, .sortedKeys]
     }
@@ -100,11 +100,29 @@ public final class MacnessRuntime {
         do {
             let result: ProcessResult
             if throughXcrun {
-                result = try processRunner.run("/usr/bin/xcrun", [tool] + arguments, captureOutput: true, check: false)
+                result = try processRunner.run(
+                    "/usr/bin/xcrun",
+                    [tool] + arguments,
+                    captureOutput: true,
+                    check: false,
+                    timeout: 10
+                )
             } else if tool == "screencapture" {
-                result = try processRunner.run("/usr/bin/which", [tool], captureOutput: true, check: false)
+                result = try processRunner.run(
+                    "/usr/bin/which",
+                    [tool],
+                    captureOutput: true,
+                    check: false,
+                    timeout: 10
+                )
             } else {
-                result = try processRunner.run("/usr/bin/env", [tool] + arguments, captureOutput: true, check: false)
+                result = try processRunner.run(
+                    "/usr/bin/env",
+                    [tool] + arguments,
+                    captureOutput: true,
+                    check: false,
+                    timeout: 10
+                )
             }
             let output = (result.stdout + result.stderr)
                 .split(separator: "\n")
@@ -138,13 +156,14 @@ public final class MacnessRuntime {
         }
         arguments.append(options.action)
         arguments += options.extraArguments
-        try processRunner.run("/usr/bin/xcrun", arguments)
+        try processRunner.run("/usr/bin/xcrun", arguments, timeout: 1_800)
     }
 
     private func launch(_ options: LaunchOptions) throws {
-        let bundleID = options.bundleID ?? options.appPath.flatMap { bundleIdentifier(forAppPath: $0) }
+        let appURL = options.appPath.map(absoluteURL)
+        let bundleID = options.bundleID ?? appURL.flatMap { Bundle(url: $0)?.bundleIdentifier }
         if options.fresh, let bundleID {
-            terminateRunningApplications(bundleID: bundleID)
+            try terminateRunningApplications(bundleID: bundleID)
         }
 
         var arguments: [String] = []
@@ -164,18 +183,31 @@ public final class MacnessRuntime {
             arguments += options.arguments
         }
 
-        try processRunner.run("/usr/bin/open", arguments, captureOutput: true)
+        try processRunner.run("/usr/bin/open", arguments, captureOutput: true, timeout: 30)
+
+        let app: NSRunningApplication?
         if options.waitSeconds > 0 {
-            Thread.sleep(forTimeInterval: options.waitSeconds)
+            app = waitForApplication(
+                bundleID: bundleID,
+                appURL: appURL,
+                timeout: options.waitSeconds
+            )
+            guard app != nil else {
+                throw MacnessError.runtime(
+                    "launched app did not become ready within \(options.waitSeconds) seconds"
+                )
+            }
+        } else {
+            app = runningApplication(bundleID: bundleID, appURL: appURL)
         }
 
         var response: [String: String] = ["status": "launched"]
         if let bundleID {
             response["bundleID"] = bundleID
-            if let app = runningApplication(bundleID: bundleID) {
-                response["pid"] = String(app.processIdentifier)
-                response["processName"] = app.localizedName ?? ""
-            }
+        }
+        if let app {
+            response["pid"] = String(app.processIdentifier)
+            response["processName"] = app.localizedName ?? ""
         }
         try writeJSON(response, to: nil)
     }
@@ -189,7 +221,7 @@ public final class MacnessRuntime {
             captureScreenshot: options.screenshot
         )
         let snapshotURL = runDirectory.appendingPathComponent("snapshot.json")
-        try writeJSON(snapshot, to: snapshotURL)
+        try artifactStore.writeJSON(snapshot, to: snapshotURL)
         return VerificationReport(ok: true, snapshotPath: snapshotURL.path, results: [])
     }
 
@@ -202,7 +234,9 @@ public final class MacnessRuntime {
             captureScreenshot: options.screenshot
         )
         let snapshotURL = runDirectory.appendingPathComponent("snapshot.json")
-        try writeJSON(snapshot, to: snapshotURL)
+        try artifactStore.writeJSON(snapshot, to: snapshotURL)
+
+        let accessibilityIndex = snapshot.accessibility.map { AXSearchIndex(root: $0) }
 
         var results: [AssertionResult] = []
         if options.expectRunning {
@@ -227,20 +261,24 @@ public final class MacnessRuntime {
         }
 
         for expectedText in options.expectedTexts {
-            let matched = snapshot.accessibility?.containsText(expectedText) ?? false
+            let matched = accessibilityIndex?.containsText(expectedText) ?? false
             results.append(AssertionResult(
                 name: "text:\(expectedText)",
                 passed: matched,
-                detail: matched ? "found in accessibility tree" : "not found in accessibility tree"
+                detail: matched
+                    ? "found in accessibility tree"
+                    : accessibilityMissDetail(snapshot, kind: "text")
             ))
         }
 
         for expectedRole in options.expectedRoles {
-            let matched = snapshot.accessibility?.containsRole(expectedRole) ?? false
+            let matched = accessibilityIndex?.containsRole(expectedRole) ?? false
             results.append(AssertionResult(
                 name: "role:\(expectedRole)",
                 passed: matched,
-                detail: matched ? "found in accessibility tree" : "not found in accessibility tree"
+                detail: matched
+                    ? "found in accessibility tree"
+                    : accessibilityMissDetail(snapshot, kind: "role")
             ))
         }
 
@@ -250,13 +288,13 @@ public final class MacnessRuntime {
             results: results
         )
         let reportURL = runDirectory.appendingPathComponent("verify.json")
-        try writeJSON(report, to: reportURL)
+        try artifactStore.writeJSON(report, to: reportURL)
         return report
     }
 
     private func monitor(_ options: MonitorOptions) throws {
         var index = 0
-        while options.count == 0 || index < options.count {
+        while index < options.count {
             let label = [options.label, String(format: "%03d", index + 1)]
                 .compactMap { $0 }
                 .joined(separator: "-")
@@ -270,7 +308,7 @@ public final class MacnessRuntime {
             let result = try snapshot(snapshotOptions)
             writeStdout(result.snapshotPath)
             index += 1
-            if options.count == 0 || index < options.count {
+            if index < options.count {
                 Thread.sleep(forTimeInterval: options.intervalSeconds)
             }
         }
@@ -280,7 +318,7 @@ public final class MacnessRuntime {
         let outputURL: URL
         if let outPath = options.outPath {
             outputURL = absoluteURL(outPath)
-            try createParentDirectory(for: outputURL)
+            try artifactStore.createPrivateParentDirectory(for: outputURL)
         } else {
             let runDirectory = try makeRunDirectory(root: nil, label: "logs")
             outputURL = runDirectory.appendingPathComponent("logs.json")
@@ -289,9 +327,13 @@ public final class MacnessRuntime {
         let predicate: String
         if let pid = options.target.pid {
             predicate = "processID == \(pid)"
-        } else if let bundleID = options.target.bundleID, let app = runningApplication(bundleID: bundleID) {
+        } else if let bundleID = options.target.bundleID,
+                  let app = runningApplication(bundleID: bundleID, appURL: nil) {
             predicate = "processID == \(app.processIdentifier)"
         } else if let bundleID = options.target.bundleID {
+            guard isValidBundleIdentifier(bundleID) else {
+                throw MacnessError.usage("--bundle-id contains unsupported characters.")
+            }
             predicate = "subsystem == \"\(bundleID)\" OR senderImagePath CONTAINS \"\(bundleID)\""
         } else {
             throw MacnessError.runtime("logs requires --bundle-id or --pid")
@@ -302,7 +344,8 @@ public final class MacnessRuntime {
             "/usr/bin/log",
             logArguments,
             to: outputURL,
-            check: false
+            check: false,
+            timeout: min(TimeInterval(options.seconds + 30), 300)
         )
         if result.exitCode != 0 {
             throw MacnessError.commandFailed(
@@ -333,9 +376,15 @@ public final class MacnessRuntime {
         let windows = collectWindows(pid: app.processIdentifier)
 
         var accessibility: AXNode?
+        var accessibilityMetadata: AccessibilitySnapshotMetadata?
         var accessibilityError: String?
         do {
-            accessibility = try accessibilityReader.capture(pid: app.processIdentifier, maxDepth: maxDepth)
+            let capture = try accessibilityReader.captureWithMetadata(
+                pid: app.processIdentifier,
+                maxDepth: maxDepth
+            )
+            accessibility = capture.root
+            accessibilityMetadata = capture.metadata
         } catch {
             accessibilityError = "\(error)"
         }
@@ -345,7 +394,13 @@ public final class MacnessRuntime {
         if captureScreenshot {
             let screenshotURL = runDirectory.appendingPathComponent("screen.png")
             do {
-                try processRunner.run("/usr/sbin/screencapture", ["-x", screenshotURL.path], captureOutput: true)
+                try processRunner.run(
+                    "/usr/sbin/screencapture",
+                    ["-x", screenshotURL.path],
+                    captureOutput: true,
+                    timeout: 30
+                )
+                try artifactStore.secureFile(at: screenshotURL)
                 screenshotPath = screenshotURL.path
             } catch {
                 screenshotError = "\(error)"
@@ -357,6 +412,7 @@ public final class MacnessRuntime {
             target: targetSnapshot,
             windows: windows,
             accessibility: accessibility,
+            accessibilityMetadata: accessibilityMetadata,
             accessibilityError: accessibilityError,
             screenshotPath: screenshotPath,
             screenshotError: screenshotError
@@ -400,19 +456,40 @@ public final class MacnessRuntime {
             }
             return app
         }
-        if let bundleID = target.bundleID, let app = runningApplication(bundleID: bundleID) {
+        if let bundleID = target.bundleID, let app = runningApplication(bundleID: bundleID, appURL: nil) {
             return app
         }
         throw MacnessError.runtime("no running app found for bundle id \(target.bundleID ?? "")")
     }
 
-    private func runningApplication(bundleID: String) -> NSRunningApplication? {
-        NSRunningApplication
-            .runningApplications(withBundleIdentifier: bundleID)
-            .first { !$0.isTerminated }
+    private func runningApplication(bundleID: String?, appURL: URL?) -> NSRunningApplication? {
+        if let bundleID {
+            return NSRunningApplication
+                .runningApplications(withBundleIdentifier: bundleID)
+                .first { !$0.isTerminated }
+        }
+        guard let standardizedURL = appURL?.standardizedFileURL else { return nil }
+        return NSWorkspace.shared.runningApplications.first {
+            !$0.isTerminated && $0.bundleURL?.standardizedFileURL == standardizedURL
+        }
     }
 
-    private func terminateRunningApplications(bundleID: String) {
+    private func waitForApplication(
+        bundleID: String?,
+        appURL: URL?,
+        timeout: TimeInterval
+    ) -> NSRunningApplication? {
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            if let app = runningApplication(bundleID: bundleID, appURL: appURL), app.isFinishedLaunching {
+                return app
+            }
+            Thread.sleep(forTimeInterval: 0.05)
+        } while Date() < deadline
+        return nil
+    }
+
+    private func terminateRunningApplications(bundleID: String) throws {
         let apps = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
         for app in apps where !app.isTerminated {
             _ = app.terminate()
@@ -425,6 +502,7 @@ public final class MacnessRuntime {
             }
             Thread.sleep(forTimeInterval: 0.1)
         }
+        throw MacnessError.runtime("running app did not terminate within 5 seconds: \(bundleID)")
     }
 
     private func bundleIdentifier(forAppPath path: String) -> String? {
@@ -445,39 +523,18 @@ public final class MacnessRuntime {
     }
 
     private func makeRunDirectory(root: String?, label: String?) throws -> URL {
-        let rootURL = absoluteURL(root ?? ".macness/runs")
-        let timestamp = ISO8601DateFormatter()
-            .string(from: Date())
-            .replacingOccurrences(of: ":", with: "")
-        let suffix = sanitize(label ?? "run")
-        let runDirectory = rootURL.appendingPathComponent("\(timestamp)-\(suffix)", isDirectory: true)
-        try fileManager.createDirectory(at: runDirectory, withIntermediateDirectories: true)
-        return runDirectory
-    }
-
-    private func createParentDirectory(for url: URL) throws {
-        try fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try artifactStore.makeRunDirectory(root: root, label: label)
     }
 
     private func absoluteURL(_ path: String) -> URL {
-        if path.hasPrefix("/") {
-            return URL(fileURLWithPath: path)
-        }
-        return URL(fileURLWithPath: fileManager.currentDirectoryPath).appendingPathComponent(path)
-    }
-
-    private func sanitize(_ value: String) -> String {
-        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
-        let scalars = value.unicodeScalars.map { allowed.contains($0) ? Character($0) : "-" }
-        let sanitized = String(scalars).trimmingCharacters(in: CharacterSet(charactersIn: "-"))
-        return sanitized.isEmpty ? "run" : sanitized
+        artifactStore.absoluteURL(path)
     }
 
     private func writeJSON<T: Encodable>(_ value: T, to url: URL?) throws {
-        let data = try jsonEncoder.encode(value)
         if let url {
-            try data.write(to: url)
+            try artifactStore.writeJSON(value, to: url)
         } else {
+            let data = try jsonEncoder.encode(value)
             FileHandle.standardOutput.write(data)
             FileHandle.standardOutput.write(Data("\n".utf8))
         }
@@ -485,5 +542,26 @@ public final class MacnessRuntime {
 
     private func writeStdout(_ message: String) {
         FileHandle.standardOutput.write(Data((message + "\n").utf8))
+    }
+
+    private func isValidBundleIdentifier(_ value: String) -> Bool {
+        !value.isEmpty
+            && value.first != "."
+            && value.last != "."
+            && !value.contains("..")
+            && value.unicodeScalars.allSatisfy {
+                CharacterSet.alphanumerics.union(CharacterSet(charactersIn: ".-")).contains($0)
+            }
+    }
+
+    private func accessibilityMissDetail(_ snapshot: AppSnapshot, kind: String) -> String {
+        if let error = snapshot.accessibilityError {
+            return "accessibility capture unavailable: \(error)"
+        }
+        if let metadata = snapshot.accessibilityMetadata, metadata.truncated {
+            return "\(kind) not found in captured portion; accessibility traversal truncated: "
+                + metadata.truncationReasons.joined(separator: ", ")
+        }
+        return "\(kind) not found in accessibility tree"
     }
 }

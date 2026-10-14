@@ -17,7 +17,7 @@ It is for developers and coding agents working on macOS apps who need proof of U
 ## Requirements
 
 - macOS 13 or later
-- Xcode and the Swift toolchain
+- Xcode and the Swift toolchain; source builds require Swift 6.3 or later
 - Accessibility permission for UI-tree inspection
 - Screen Recording permission for screenshots
 
@@ -46,7 +46,7 @@ swift test
 
 ### Apple Silicon source/dev release package
 
-Create a deterministic offline zip for Apple Silicon Macs:
+Create a self-contained offline zip for Apple Silicon Macs:
 
 ```sh
 ./scripts/package_release.sh
@@ -55,8 +55,9 @@ Create a deterministic offline zip for Apple Silicon Macs:
 The GitHub source/dev release attaches this deterministic archive and its SHA-256 checksum. The archive contains the `arm64` executable, Apache-2.0 notices, an unsigned-build notice, checksum, and an offline installer. On another Apple Silicon Mac:
 
 ```sh
-unzip macness-0.1.0-macos-arm64.zip
-cd macness-0.1.0-macos-arm64
+shasum -a 256 -c macness-0.1.1-macos-arm64.zip.sha256
+unzip macness-0.1.1-macos-arm64.zip
+cd macness-0.1.1-macos-arm64
 ./install.sh
 export PATH="$HOME/.local/bin:$PATH"
 macness doctor --json
@@ -66,7 +67,7 @@ No compiler or repository checkout is needed on the destination Mac. Building ap
 
 The attached developer binary is not signed with an Apple Developer ID and is not notarized. Gatekeeper may block or warn about it because its publisher cannot be verified. Review the source and checksum before deciding whether to run it; this release does not promise a frictionless Gatekeeper installation.
 
-Signing and notarization remain future production-binary work. When a Developer ID is available, package a production candidate with:
+Signing and notarization require an Apple Developer Program account, a Developer ID Application certificate in the login keychain, and a stored `notarytool` profile. No entitlements are required. The packaging script signs the only executable with the hardened runtime, verifies the signature, submits the exact zip, requires an `Accepted` response, and runs Gatekeeper assessment before reporting success:
 
 ```sh
 xcrun notarytool store-credentials macness-notary \
@@ -76,7 +77,13 @@ xcrun notarytool store-credentials macness-notary \
   --notary-profile macness-notary
 ```
 
-The archive is submitted to Apple and the script waits for the notarization result. A standalone executable inside a zip cannot carry a stapled ticket, so the destination Mac must be online for Gatekeeper's notarization lookup on first launch.
+The accepted response is saved beside the archive as `.notarization.json`. A standalone executable inside a zip cannot carry a stapled ticket, so the destination Mac must be online for Gatekeeper's notarization lookup on first launch. Do not describe a Developer ID-only archive as notarized unless that record says `Accepted`.
+
+Before transferring any archive to another Mac, verify its manifest, checksum, architecture, offline installation, and relocated launch:
+
+```sh
+./scripts/verify_release_archive.sh dist/macness-0.1.1-macos-arm64.zip
+```
 
 ## Quick start
 
@@ -84,18 +91,20 @@ Build, launch, then assert the UI state you care about:
 
 ```sh
 macness build --project MyApp.xcodeproj --scheme MyApp --configuration Debug
-macness launch --app ./Build/Products/Debug/MyApp.app --fresh
+macness launch --app ./Build/Products/Debug/MyApp.app --fresh --wait 10
 macness verify --bundle-id com.example.MyApp \
   --expect-window "My App" \
   --expect-text "Ready" \
   --expect-role AXButton
 ```
 
-Runs write artifacts below `.macness/runs/<timestamp>-<label>/` unless `--out` is supplied:
+Runs write artifacts below a collision-safe `.macness/runs/<timestamp>-<label>-<nonce>/` directory unless `--out` is supplied. Run directories are created with owner-only permissions, and JSON, screenshots, and log files are restricted to the owner:
 
 - `snapshot.json` — process, window, and accessibility-tree state
 - `verify.json` — assertion results and exit status
 - `screen.png` — optional desktop screen capture
+
+Accessibility capture is bounded to 5,000 nodes, 250 children per node, the requested depth, and a 15-second traversal budget. `snapshot.json` records `accessibilityMetadata.truncated` and the exact limits that stopped traversal. Treat a failed text or role expectation as inconclusive when capture was truncated outside the relevant part of the tree.
 
 ## Verification model
 
@@ -103,14 +112,14 @@ Macness separates state capture from evaluation. `snapshot` collects available e
 
 An assertion-free `verify` currently confirms only that the target process was resolved. Accessibility and screenshot errors are recorded in `snapshot.json`. Choose expectations that match the user-visible behavior being changed, and inspect the generated artifacts before calling a workflow complete.
 
-Screen captures include the desktop rather than only the target window. Treat them as potentially sensitive build artifacts.
+Screen captures include the desktop rather than only the target window. Unified logs can also contain application data. Treat both as sensitive even though Macness writes them with private filesystem permissions.
 
 ## Commands
 
 ```sh
 macness doctor [--prompt] [--json]
 macness build (--project PATH | --workspace PATH) [--scheme NAME] [--configuration NAME]
-macness launch (--app PATH | --bundle-id ID) [--fresh] [--hide] [-- APP_ARGS...]
+macness launch (--app PATH | --bundle-id ID) [--fresh] [--hide] [--wait SECONDS] [-- APP_ARGS...]
 macness snapshot (--bundle-id ID | --pid PID) [--out DIR] [--label NAME]
 macness verify (--bundle-id ID | --pid PID) --expect-text TEXT
 macness monitor (--bundle-id ID | --pid PID) [--interval SECONDS] [--count N]
@@ -118,6 +127,8 @@ macness logs (--bundle-id ID | --pid PID) [--seconds N] [--out FILE]
 ```
 
 Use `macness --help` for the complete option reference.
+
+`--wait` is a readiness timeout rather than a fixed delay: Macness returns when the process reports that it finished launching, or fails when the timeout expires. Numeric options reject negative, non-finite, and unsafe values. Monitoring requires a finite count; log collection is limited to 24 hours and 50 MiB per invocation.
 
 ## Codex integration
 

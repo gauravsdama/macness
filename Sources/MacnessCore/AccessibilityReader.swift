@@ -3,20 +3,68 @@ import CoreGraphics
 import Foundation
 
 public final class AccessibilityReader {
-    private let maxChildrenPerNode = 250
+    private let maxChildrenPerNode: Int
+    private let maxNodes: Int
+    private let messagingTimeout: Float
+    private let captureTimeout: TimeInterval
 
-    public init() {}
+    public init() {
+        self.maxNodes = 5_000
+        self.maxChildrenPerNode = 250
+        self.messagingTimeout = 1
+        self.captureTimeout = 15
+    }
+
+    init(
+        maxNodes: Int,
+        maxChildrenPerNode: Int,
+        messagingTimeout: Float,
+        captureTimeout: TimeInterval
+    ) {
+        self.maxNodes = max(1, maxNodes)
+        self.maxChildrenPerNode = max(1, maxChildrenPerNode)
+        self.messagingTimeout = max(0.1, messagingTimeout)
+        self.captureTimeout = max(0.1, captureTimeout)
+    }
 
     public func capture(pid: Int32, maxDepth: Int) throws -> AXNode {
+        try captureWithMetadata(pid: pid, maxDepth: maxDepth).root
+    }
+
+    func captureWithMetadata(pid: Int32, maxDepth: Int) throws -> AccessibilityCapture {
         guard AXIsProcessTrusted() else {
             throw MacnessError.runtime("Accessibility permission is not granted. Run `macness doctor --prompt` and allow access in System Settings.")
         }
 
         let appElement = AXUIElementCreateApplication(pid)
-        return capture(element: appElement, depth: 0, maxDepth: max(0, maxDepth))
+        AXUIElementSetMessagingTimeout(appElement, messagingTimeout)
+        let boundedDepth = max(0, maxDepth)
+        var state = TraversalState(
+            deadline: ProcessInfo.processInfo.systemUptime + captureTimeout
+        )
+        let root = capture(element: appElement, depth: 0, maxDepth: boundedDepth, state: &state)
+        let reasons = state.truncationReasons.sorted()
+        return AccessibilityCapture(
+            root: root,
+            metadata: AccessibilitySnapshotMetadata(
+                nodesVisited: state.nodesVisited,
+                maxNodes: maxNodes,
+                maxDepth: boundedDepth,
+                maxChildrenPerNode: maxChildrenPerNode,
+                maxDurationSeconds: captureTimeout,
+                truncated: !reasons.isEmpty,
+                truncationReasons: reasons
+            )
+        )
     }
 
-    private func capture(element: AXUIElement, depth: Int, maxDepth: Int) -> AXNode {
+    private func capture(
+        element: AXUIElement,
+        depth: Int,
+        maxDepth: Int,
+        state: inout TraversalState
+    ) -> AXNode {
+        state.nodesVisited += 1
         var node = AXNode(
             role: stringAttribute(element, kAXRoleAttribute),
             subrole: stringAttribute(element, kAXSubroleAttribute),
@@ -30,14 +78,39 @@ public final class AccessibilityReader {
             frame: frame(element)
         )
 
-        guard depth < maxDepth else {
+        guard let children = copyAttribute(element, kAXChildrenAttribute) as? [AXUIElement], !children.isEmpty else {
             return node
         }
 
-        if let children = copyAttribute(element, kAXChildrenAttribute) as? [AXUIElement] {
-            node.children = children.prefix(maxChildrenPerNode).map {
-                capture(element: $0, depth: depth + 1, maxDepth: maxDepth)
+        guard ProcessInfo.processInfo.systemUptime < state.deadline else {
+            state.truncationReasons.insert("max-duration")
+            return node
+        }
+
+        guard depth < maxDepth else {
+            state.truncationReasons.insert("max-depth")
+            return node
+        }
+
+        if children.count > maxChildrenPerNode {
+            state.truncationReasons.insert("max-children-per-node")
+        }
+
+        for child in children.prefix(maxChildrenPerNode) {
+            guard ProcessInfo.processInfo.systemUptime < state.deadline else {
+                state.truncationReasons.insert("max-duration")
+                break
             }
+            guard state.nodesVisited < maxNodes else {
+                state.truncationReasons.insert("max-nodes")
+                break
+            }
+            node.children.append(capture(
+                element: child,
+                depth: depth + 1,
+                maxDepth: maxDepth,
+                state: &state
+            ))
         }
 
         return node
@@ -149,4 +222,20 @@ public final class AccessibilityReader {
         }
         return rect
     }
+}
+
+struct AccessibilityCapture: Equatable {
+    var root: AXNode
+    var metadata: AccessibilitySnapshotMetadata
+
+    init(root: AXNode, metadata: AccessibilitySnapshotMetadata) {
+        self.root = root
+        self.metadata = metadata
+    }
+}
+
+private struct TraversalState {
+    let deadline: TimeInterval
+    var nodesVisited = 0
+    var truncationReasons = Set<String>()
 }

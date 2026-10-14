@@ -7,6 +7,8 @@ Macness should remain a small local verification tool with clear evidence and ex
 3. Bound long-running work such as logs, monitoring, and captures.
 4. Treat accessibility and screen-capture permissions as runtime dependencies, not assumptions.
 5. Add focused Swift tests for parsing, models, or runtime behavior you change.
+6. Drain stdout and stderr concurrently, retain only bounded diagnostics, and give every child process a timeout.
+7. Preserve private, atomic artifact writes and expose truncation instead of silently presenting partial evidence as complete.
 
 Run:
 

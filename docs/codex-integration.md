@@ -33,7 +33,9 @@ Use the `macness` skill for native macOS app changes. Run `macness doctor`
 before UI verification. Build, launch, and then use `macness verify` with at
 least one `--expect-window`, `--expect-text`, or `--expect-role` assertion.
 Inspect `snapshot.json` and `verify.json` before reporting success. Treat
-desktop screenshots as potentially sensitive artifacts.
+desktop screenshots as potentially sensitive artifacts. If
+`accessibilityMetadata.truncated` is true, do not treat an unmatched text or
+role assertion as proof that the element is absent.
 ```
 
 ## Functional pathways

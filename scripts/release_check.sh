@@ -11,10 +11,13 @@ esac
 
 cd "$project_root"
 git diff --check
+/bin/sh -n scripts/install_release.sh scripts/package_release.sh scripts/release_check.sh scripts/setup.sh
+/bin/sh -n scripts/verify_release_archive.sh
+/bin/zsh -n scripts/setup_macos.sh
 swift test
 swift build -c release
 "$project_root/.build/release/macness" --help >/dev/null
-test "$($project_root/.build/release/macness --version)" = "0.1.0"
+test "$($project_root/.build/release/macness --version)" = "0.1.1"
 
 if git grep -n '/Users/' -- . ':!scripts/release_check.sh'; then
   echo "Release check failed: a tracked personal home path was found." >&2
